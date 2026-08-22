@@ -4,7 +4,6 @@
   <meta charset="UTF-8">
   <title>Vite to Next.js AST Converter</title>
   <script src="https://cdn.tailwindcss.com"></script>
-  <!-- Load Babel Standalone for parsing in the browser. Could be differnt for self hosted which I still need to do lmao -->
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 </head>
 <body class="bg-slate-900 text-slate-100 p-6 min-h-screen">
@@ -33,54 +32,113 @@
     </div>
   </div>
 
-  <script type="module">
+  <script>
     document.getElementById('convert-btn').addEventListener('click', () => {
       const source = document.getElementById('input').value;
+      if (!source.trim()) return;
+
       const warnings = [];
       let needsClientDirective = false;
 
       try {
+        const traverse = Babel.packages.traverse.default || Babel.packages.traverse;
+
         const ast = Babel.packages.parser.parse(source, {
           sourceType: "module",
           plugins: ["typescript", "jsx"]
         });
 
-        Babel.traverse(ast, {
+        traverse(ast, {
           ImportDeclaration(path) {
             if (path.node.source.value === "react-router-dom") {
-              path.node.specifiers.forEach(spec => {
-                if (spec.imported?.name === "useLocation") {
+              let hasLink = false;
+              let hasNavHooks = false;
+
+              path.node.specifiers.forEach((spec) => {
+                const importedName = spec.imported ? spec.imported.name : null;
+
+                if (importedName === "Link") {
+                  hasLink = true;
+                } else if (importedName === "useLocation") {
+                  hasNavHooks = true;
                   needsClientDirective = true;
                   path.scope.rename("useLocation", "usePathname");
                   path.scope.rename("location", "pathname");
-                }
-                if (spec.imported?.name === "useNavigate") {
+                } else if (importedName === "useNavigate") {
+                  hasNavHooks = true;
                   needsClientDirective = true;
                   path.scope.rename("useNavigate", "useRouter");
                   path.scope.rename("navigate", "router");
-                }
-                if (spec.imported?.name === "useParams") {
-                  warnings.push("`useParams()` detected: Convert to Next.js page props ({ params }).");
+                } else if (importedName === "useParams") {
+                  warnings.push("`useParams()` detected: Next.js page params should be accepted via page props ({ params }).");
                 }
               });
 
-              path.node.source.value = "next/navigation";
+              if (hasLink) {
+                path.insertBefore(
+                  Babel.packages.types.importDeclaration(
+                    [Babel.packages.types.importDefaultSpecifier(Babel.packages.types.identifier("Link"))],
+                    Babel.packages.types.stringLiteral("next/link")
+                  )
+                );
+              }
+              if (hasNavHooks) {
+                path.insertBefore(
+                  Babel.packages.types.importDeclaration(
+                    [
+                      Babel.packages.types.importSpecifier(Babel.packages.types.identifier("usePathname"), Babel.packages.types.identifier("usePathname")),
+                      Babel.packages.types.importSpecifier(Babel.packages.types.identifier("useRouter"), Babel.packages.types.identifier("useRouter"))
+                    ],
+                    Babel.packages.types.stringLiteral("next/navigation")
+                  )
+                );
+              }
+
+              path.remove();
             }
           },
+
           JSXAttribute(path) {
             if (path.node.name.name === "to" && path.parentPath.node.name?.name === "Link") {
               path.node.name.name = "href";
             }
+          },
+
+          CallExpression(path) {
+            const calleeName = path.node.callee.name;
+            const clientHooks = ["useState", "useEffect", "useContext", "useReducer", "useCallback", "useMemo", "useRef"];
+            if (clientHooks.includes(calleeName)) {
+              needsClientDirective = true;
+            }
+
+            if (calleeName === "navigate") {
+              const arg = path.node.arguments[0];
+              if (arg && arg.type === "UnaryExpression" && arg.operator === "-" && arg.argument.value === 1) {
+                path.node.callee = Babel.packages.types.memberExpression(
+                  Babel.packages.types.identifier("router"),
+                  Babel.packages.types.identifier("back")
+                );
+                path.node.arguments = [];
+              } else {
+                path.node.callee = Babel.packages.types.memberExpression(
+                  Babel.packages.types.identifier("router"),
+                  Babel.packages.types.identifier("push")
+                );
+              }
+            }
           }
         });
 
-        let converted = Babel.transformFromAst(ast, null, { presets: [] }).code;
+        let { code } = Babel.transformFromAst(ast, null, {
+          presets: [],
+          filename: 'file.tsx'
+        });
 
         if (needsClientDirective) {
-          converted = `"use client";\n\n` + converted;
+          code = `"use client";\n\n` + code;
         }
 
-        document.getElementById('output').value = converted;
+        document.getElementById('output').value = code;
 
         const warningsList = document.getElementById('warnings');
         warningsList.innerHTML = warnings.length > 0 
@@ -89,6 +147,7 @@
 
       } catch (err) {
         alert("Parsing Error: " + err.message);
+        console.error(err);
       }
     });
   </script>
