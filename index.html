@@ -25,7 +25,7 @@
     <button id="convert-btn" class="px-5 py-2 bg-blue-600 hover:bg-blue-500 rounded font-bold text-sm">Convert Code</button>
 
     <div class="mt-6 p-4 bg-slate-800 rounded border border-slate-700">
-      <h2 class="text-lg font-semibold text-amber-400 mb-2">Manual Refactoring Needed (Warnings)</h2>
+      <h2 class="text-lg font-semibold text-amber-400 mb-2">Manual Refactoring Needed / Typo Warnings</h2>
       <ul id="warnings" class="list-disc list-inside text-sm text-slate-300 space-y-1">
         <li class="text-slate-500 italic">No warnings generated yet.</li>
       </ul>
@@ -42,6 +42,7 @@
 
       try {
         const traverse = Babel.packages.traverse.default || Babel.packages.traverse;
+        const t = Babel.packages.types;
 
         const ast = Babel.packages.parser.parse(source, {
           sourceType: "module",
@@ -70,31 +71,59 @@
                   path.scope.rename("useNavigate", "useRouter");
                   path.scope.rename("navigate", "router");
                 } else if (importedName === "useParams") {
-                  warnings.push("`useParams()` detected: Next.js page params should be accepted via page props ({ params }).");
+                  warnings.push("`useParams()` detected: Next.js page params should be accepted via page props ({ params }) in Server Components.");
                 }
               });
 
               if (hasLink) {
                 path.insertBefore(
-                  Babel.packages.types.importDeclaration(
-                    [Babel.packages.types.importDefaultSpecifier(Babel.packages.types.identifier("Link"))],
-                    Babel.packages.types.stringLiteral("next/link")
+                  t.importDeclaration(
+                    [t.importDefaultSpecifier(t.identifier("Link"))],
+                    t.stringLiteral("next/link")
                   )
                 );
               }
               if (hasNavHooks) {
                 path.insertBefore(
-                  Babel.packages.types.importDeclaration(
+                  t.importDeclaration(
                     [
-                      Babel.packages.types.importSpecifier(Babel.packages.types.identifier("usePathname"), Babel.packages.types.identifier("usePathname")),
-                      Babel.packages.types.importSpecifier(Babel.packages.types.identifier("useRouter"), Babel.packages.types.identifier("useRouter"))
+                      t.importSpecifier(t.identifier("usePathname"), t.identifier("usePathname")),
+                      t.importSpecifier(t.identifier("useRouter"), t.identifier("useRouter"))
                     ],
-                    Babel.packages.types.stringLiteral("next/navigation")
+                    t.stringLiteral("next/navigation")
                   )
                 );
               }
 
               path.remove();
+            }
+          },
+
+          MemberExpression(path) {
+            if (
+              t.isIdentifier(path.node.object, { name: "pathname" }) &&
+              t.isIdentifier(path.node.property, { name: "pathname" })
+            ) {
+              path.replaceWith(t.identifier("pathname"));
+            }
+          },
+
+          CallExpression(path) {
+            const callee = path.node.callee;
+            
+            const clientHooks = ["useState", "useEffect", "useContext", "useReducer", "useCallback", "useMemo", "useRef"];
+            if (t.isIdentifier(callee) && clientHooks.includes(callee.name)) {
+              needsClientDirective = true;
+            }
+
+            if (t.isIdentifier(callee, { name: "router" })) {
+              const arg = path.node.arguments[0];
+              if (arg && arg.type === "UnaryExpression" && arg.operator === "-" && arg.argument.value === 1) {
+                path.node.callee = t.memberExpression(t.identifier("router"), t.identifier("back"));
+                path.node.arguments = [];
+              } else {
+                path.node.callee = t.memberExpression(t.identifier("router"), t.identifier("push"));
+              }
             }
           },
 
@@ -104,27 +133,14 @@
             }
           },
 
-          CallExpression(path) {
-            const calleeName = path.node.callee.name;
-            const clientHooks = ["useState", "useEffect", "useContext", "useReducer", "useCallback", "useMemo", "useRef"];
-            if (clientHooks.includes(calleeName)) {
-              needsClientDirective = true;
+          StringLiteral(path) {
+            if (path.node.value.includes("exsist")) {
+              warnings.push("Typo detected in string literal: 'exsist' -> should be 'exist'.");
             }
-
-            if (calleeName === "navigate") {
-              const arg = path.node.arguments[0];
-              if (arg && arg.type === "UnaryExpression" && arg.operator === "-" && arg.argument.value === 1) {
-                path.node.callee = Babel.packages.types.memberExpression(
-                  Babel.packages.types.identifier("router"),
-                  Babel.packages.types.identifier("back")
-                );
-                path.node.arguments = [];
-              } else {
-                path.node.callee = Babel.packages.types.memberExpression(
-                  Babel.packages.types.identifier("router"),
-                  Babel.packages.types.identifier("push")
-                );
-              }
+          },
+          JSXText(path) {
+            if (path.node.value.includes("exsist")) {
+              warnings.push("Typo detected in JSX text: 'exsist' -> should be 'exist'.");
             }
           }
         });
