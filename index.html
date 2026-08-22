@@ -25,7 +25,7 @@
     <button id="convert-btn" class="px-5 py-2 bg-blue-600 hover:bg-blue-500 rounded font-bold text-sm">Convert Code</button>
 
     <div class="mt-6 p-4 bg-slate-800 rounded border border-slate-700">
-      <h2 class="text-lg font-semibold text-amber-400 mb-2">Manual Refactoring Needed / Typo Warnings</h2>
+      <h2 class="text-lg font-semibold text-amber-400 mb-2">Automated Fixes & Warnings Log</h2>
       <ul id="warnings" class="list-disc list-inside text-sm text-slate-300 space-y-1">
         <li class="text-slate-500 italic">No warnings generated yet.</li>
       </ul>
@@ -49,8 +49,12 @@
           plugins: ["typescript", "jsx"]
         });
 
+        const pathnameVars = new Set();
+
         traverse(ast, {
           ImportDeclaration(path) {
+            const line = path.node.loc?.start.line ?? '?';
+
             if (path.node.source.value === "react-router-dom") {
               let hasLink = false;
               let hasNavHooks = false;
@@ -65,13 +69,15 @@
                   needsClientDirective = true;
                   path.scope.rename("useLocation", "usePathname");
                   path.scope.rename("location", "pathname");
+                  warnings.push(`[Line ${line}] Replaced 'useLocation' with 'usePathname' (Next.js returns a string directly).`);
                 } else if (importedName === "useNavigate") {
                   hasNavHooks = true;
                   needsClientDirective = true;
                   path.scope.rename("useNavigate", "useRouter");
                   path.scope.rename("navigate", "router");
+                  warnings.push(`[Line ${line}] Replaced 'useNavigate' with 'useRouter' from 'next/navigation'.`);
                 } else if (importedName === "useParams") {
-                  warnings.push("`useParams()` detected: Next.js page params should be accepted via page props ({ params }) in Server Components.");
+                  warnings.push(`[Line ${line}] Manual Refactor: 'useParams()' detected. Pass route parameters as page props ({ params }) in App Router.`);
                 }
               });
 
@@ -99,16 +105,31 @@
             }
           },
 
-          MemberExpression(path) {
+          VariableDeclarator(path) {
             if (
-              t.isIdentifier(path.node.object, { name: "pathname" }) &&
-              t.isIdentifier(path.node.property, { name: "pathname" })
+              t.isCallExpression(path.node.init) &&
+              (path.node.init.callee.name === "usePathname" || path.node.init.callee.name === "useLocation")
             ) {
-              path.replaceWith(t.identifier("pathname"));
+              if (t.isIdentifier(path.node.id)) {
+                pathnameVars.add(path.node.id.name);
+              }
+            }
+          },
+
+          MemberExpression(path) {
+            const line = path.node.loc?.start.line ?? '?';
+            
+            if (
+              t.isIdentifier(path.node.property, { name: "pathname" }) &&
+              (pathnameVars.has(path.node.object.name) || path.node.object.name === "location" || path.node.object.name === "pathname")
+            ) {
+              path.replaceWith(path.node.object);
+              warnings.push(`[Line ${line}] Fixed Router Misuse: Replaced member access '${path.node.object.name}.pathname' with direct string variable '${path.node.object.name}'.`);
             }
           },
 
           CallExpression(path) {
+            const line = path.node.loc?.start.line ?? '?';
             const callee = path.node.callee;
             
             const clientHooks = ["useState", "useEffect", "useContext", "useReducer", "useCallback", "useMemo", "useRef"];
@@ -116,31 +137,41 @@
               needsClientDirective = true;
             }
 
-            if (t.isIdentifier(callee, { name: "router" })) {
+            if (t.isIdentifier(callee, { name: "router" }) || t.isIdentifier(callee, { name: "navigate" })) {
               const arg = path.node.arguments[0];
+              
               if (arg && arg.type === "UnaryExpression" && arg.operator === "-" && arg.argument.value === 1) {
                 path.node.callee = t.memberExpression(t.identifier("router"), t.identifier("back"));
                 path.node.arguments = [];
-              } else {
+                warnings.push(`[Line ${line}] Fixed Back Navigation: Converted 'navigate(-1)' call to 'router.back()'.`);
+              } 
+              else {
                 path.node.callee = t.memberExpression(t.identifier("router"), t.identifier("push"));
+                warnings.push(`[Line ${line}] Converted imperative navigation call to 'router.push()'.`);
               }
             }
           },
 
           JSXAttribute(path) {
+            const line = path.node.loc?.start.line ?? '?';
             if (path.node.name.name === "to" && path.parentPath.node.name?.name === "Link") {
               path.node.name.name = "href";
+              warnings.push(`[Line ${line}] Converted React Router attribute 'to' on <Link> to Next.js 'href'.`);
             }
           },
 
           StringLiteral(path) {
+            const line = path.node.loc?.start.line ?? '?';
             if (path.node.value.includes("exsist")) {
-              warnings.push("Typo detected in string literal: 'exsist' -> should be 'exist'.");
+              path.node.value = path.node.value.replace(/exsist/g, "exist");
+              warnings.push(`[Line ${line}] Fixed Typo: Auto-corrected 'exsist' to 'exist' inside string literal.`);
             }
           },
           JSXText(path) {
+            const line = path.node.loc?.start.line ?? '?';
             if (path.node.value.includes("exsist")) {
-              warnings.push("Typo detected in JSX text: 'exsist' -> should be 'exist'.");
+              path.node.value = path.node.value.replace(/exsist/g, "exist");
+              warnings.push(`[Line ${line}] Fixed Typo: Auto-corrected 'exsist' to 'exist' inside JSX text.`);
             }
           }
         });
@@ -158,8 +189,8 @@
 
         const warningsList = document.getElementById('warnings');
         warningsList.innerHTML = warnings.length > 0 
-          ? warnings.map(w => `<li class="text-amber-300">${w}</li>`).join('')
-          : '<li class="text-green-400">All detected features converted automatically!</li>';
+          ? warnings.map(w => `<li class="text-amber-300 font-mono">${w}</li>`).join('')
+          : '<li class="text-green-400">All detected features converted automatically with no issues!</li>';
 
       } catch (err) {
         alert("Parsing Error: " + err.message);
