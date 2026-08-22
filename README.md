@@ -28,7 +28,7 @@ Since it's built to run statically, you have two options:
 ### Option 1: Open locally
 Just clone the repo and open `index.html` in your browser.
 ```bash
-git clone [https://github.com/SoulDevOfficial/VRTN-Converter.git](https://github.com/SoulDevOfficial/VRTN-Converter.git)
+git clone https://github.com/SoulDevOfficial/VRTN-Converter.git
 cd vite-to-next-converter
 open index.html
 ```
