@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Vite to Next.js AST Converter</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Load Babel Standalone for parsing in the browser. Could be differnt for self hosted which I still need to do lmao -->
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+</head>
+<body class="bg-slate-900 text-slate-100 p-6 min-h-screen">
+  <div class="max-w-6xl mx-auto space-y-4">
+    <h1 class="text-2xl font-bold">Vite + React to Next.js App Router Converter</h1>
+    
+    <div class="grid grid-cols-2 gap-4">
+      <div>
+        <label class="block text-sm font-medium mb-1">Vite TSX Input</label>
+        <textarea id="input" class="w-full h-96 p-3 bg-slate-800 border border-slate-700 rounded font-mono text-xs focus:outline-none" placeholder="Paste Vite TSX code here..."></textarea>
+      </div>
+
+      <div>
+        <label class="block text-sm font-medium mb-1">Next.js TSX Output</label>
+        <textarea id="output" readonly class="w-full h-96 p-3 bg-slate-800 border border-slate-700 rounded font-mono text-xs focus:outline-none" placeholder="Converted code will appear here..."></textarea>
+      </div>
+    </div>
+
+    <button id="convert-btn" class="px-5 py-2 bg-blue-600 hover:bg-blue-500 rounded font-bold text-sm">Convert Code</button>
+
+    <div class="mt-6 p-4 bg-slate-800 rounded border border-slate-700">
+      <h2 class="text-lg font-semibold text-amber-400 mb-2">Manual Refactoring Needed (Warnings)</h2>
+      <ul id="warnings" class="list-disc list-inside text-sm text-slate-300 space-y-1">
+        <li class="text-slate-500 italic">No warnings generated yet.</li>
+      </ul>
+    </div>
+  </div>
+
+  <script type="module">
+    document.getElementById('convert-btn').addEventListener('click', () => {
+      const source = document.getElementById('input').value;
+      const warnings = [];
+      let needsClientDirective = false;
+
+      try {
+        const ast = Babel.packages.parser.parse(source, {
+          sourceType: "module",
+          plugins: ["typescript", "jsx"]
+        });
+
+        Babel.traverse(ast, {
+          ImportDeclaration(path) {
+            if (path.node.source.value === "react-router-dom") {
+              path.node.specifiers.forEach(spec => {
+                if (spec.imported?.name === "useLocation") {
+                  needsClientDirective = true;
+                  path.scope.rename("useLocation", "usePathname");
+                  path.scope.rename("location", "pathname");
+                }
+                if (spec.imported?.name === "useNavigate") {
+                  needsClientDirective = true;
+                  path.scope.rename("useNavigate", "useRouter");
+                  path.scope.rename("navigate", "router");
+                }
+                if (spec.imported?.name === "useParams") {
+                  warnings.push("`useParams()` detected: Convert to Next.js page props ({ params }).");
+                }
+              });
+
+              path.node.source.value = "next/navigation";
+            }
+          },
+          JSXAttribute(path) {
+            if (path.node.name.name === "to" && path.parentPath.node.name?.name === "Link") {
+              path.node.name.name = "href";
+            }
+          }
+        });
+
+        let converted = Babel.transformFromAst(ast, null, { presets: [] }).code;
+
+        if (needsClientDirective) {
+          converted = `"use client";\n\n` + converted;
+        }
+
+        document.getElementById('output').value = converted;
+
+        const warningsList = document.getElementById('warnings');
+        warningsList.innerHTML = warnings.length > 0 
+          ? warnings.map(w => `<li class="text-amber-300">${w}</li>`).join('')
+          : '<li class="text-green-400">All detected features converted automatically!</li>';
+
+      } catch (err) {
+        alert("Parsing Error: " + err.message);
+      }
+    });
+  </script>
+</body>
+</html>
