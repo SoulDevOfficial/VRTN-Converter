@@ -49,7 +49,7 @@
           plugins: ["typescript", "jsx"]
         });
 
-        const pathnameVars = new Set();
+        const pathnameVars = new Set(["location", "pathname"]);
 
         traverse(ast, {
           ImportDeclaration(path) {
@@ -69,7 +69,7 @@
                   needsClientDirective = true;
                   path.scope.rename("useLocation", "usePathname");
                   path.scope.rename("location", "pathname");
-                  warnings.push(`[Line ${line}] Replaced 'useLocation' with 'usePathname' (Next.js returns a string directly).`);
+                  warnings.push(`[Line ${line}] Replaced 'useLocation' with 'usePathname' (returns path string directly).`);
                 } else if (importedName === "useNavigate") {
                   hasNavHooks = true;
                   needsClientDirective = true;
@@ -108,7 +108,8 @@
           VariableDeclarator(path) {
             if (
               t.isCallExpression(path.node.init) &&
-              (path.node.init.callee.name === "usePathname" || path.node.init.callee.name === "useLocation")
+              t.isIdentifier(path.node.init.callee) &&
+              ["usePathname", "useLocation"].includes(path.node.init.callee.name)
             ) {
               if (t.isIdentifier(path.node.id)) {
                 pathnameVars.add(path.node.id.name);
@@ -118,13 +119,17 @@
 
           MemberExpression(path) {
             const line = path.node.loc?.start.line ?? '?';
+            const objectNode = path.node.object;
+            const propertyNode = path.node.property;
             
             if (
-              t.isIdentifier(path.node.property, { name: "pathname" }) &&
-              (pathnameVars.has(path.node.object.name) || path.node.object.name === "location" || path.node.object.name === "pathname")
+              t.isIdentifier(objectNode) &&
+              t.isIdentifier(propertyNode, { name: "pathname" }) &&
+              pathnameVars.has(objectNode.name)
             ) {
-              path.replaceWith(path.node.object);
-              warnings.push(`[Line ${line}] Fixed Router Misuse: Replaced member access '${path.node.object.name}.pathname' with direct string variable '${path.node.object.name}'.`);
+              const varName = objectNode.name;
+              path.replaceWith(objectNode);
+              warnings.push(`[Line ${line}] Fixed Router Misuse: Replaced member access '${varName}.pathname' with direct string variable '${varName}'.`);
             }
           },
 
@@ -137,15 +142,14 @@
               needsClientDirective = true;
             }
 
-            if (t.isIdentifier(callee, { name: "router" }) || t.isIdentifier(callee, { name: "navigate" })) {
+            if (t.isIdentifier(callee) && ["router", "navigate"].includes(callee.name)) {
               const arg = path.node.arguments[0];
               
-              if (arg && arg.type === "UnaryExpression" && arg.operator === "-" && arg.argument.value === 1) {
+              if (arg && t.isUnaryExpression(arg) && arg.operator === "-" && t.isNumericLiteral(arg.argument, { value: 1 })) {
                 path.node.callee = t.memberExpression(t.identifier("router"), t.identifier("back"));
                 path.node.arguments = [];
                 warnings.push(`[Line ${line}] Fixed Back Navigation: Converted 'navigate(-1)' call to 'router.back()'.`);
-              } 
-              else {
+              } else if (arg) {
                 path.node.callee = t.memberExpression(t.identifier("router"), t.identifier("push"));
                 warnings.push(`[Line ${line}] Converted imperative navigation call to 'router.push()'.`);
               }
@@ -154,7 +158,7 @@
 
           JSXAttribute(path) {
             const line = path.node.loc?.start.line ?? '?';
-            if (path.node.name.name === "to" && path.parentPath.node.name?.name === "Link") {
+            if (path.node.name.name === "to" && t.isJSXIdentifier(path.parentPath.node.name, { name: "Link" })) {
               path.node.name.name = "href";
               warnings.push(`[Line ${line}] Converted React Router attribute 'to' on <Link> to Next.js 'href'.`);
             }
