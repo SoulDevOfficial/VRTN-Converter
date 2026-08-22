@@ -69,13 +69,13 @@
                   needsClientDirective = true;
                   path.scope.rename("useLocation", "usePathname");
                   path.scope.rename("location", "pathname");
-                  warnings.push(`[Line ${line}] Replaced 'useLocation' with 'usePathname' (returns path string directly).`);
+                  warnings.push(`[Line ${line}] Replaced 'useLocation' with 'usePathname' & renamed 'location' variable to 'pathname'.`);
                 } else if (importedName === "useNavigate") {
                   hasNavHooks = true;
                   needsClientDirective = true;
                   path.scope.rename("useNavigate", "useRouter");
                   path.scope.rename("navigate", "router");
-                  warnings.push(`[Line ${line}] Replaced 'useNavigate' with 'useRouter' from 'next/navigation'.`);
+                  warnings.push(`[Line ${line}] Replaced 'useNavigate' with 'useRouter' & renamed 'navigate' variable/calls to 'router'.`);
                 } else if (importedName === "useParams") {
                   warnings.push(`[Line ${line}] Manual Refactor: 'useParams()' detected. Pass route parameters as page props ({ params }) in App Router.`);
                 }
@@ -106,13 +106,26 @@
           },
 
           VariableDeclarator(path) {
-            if (
-              t.isCallExpression(path.node.init) &&
-              t.isIdentifier(path.node.init.callee) &&
-              ["usePathname", "useLocation"].includes(path.node.init.callee.name)
-            ) {
-              if (t.isIdentifier(path.node.id)) {
-                pathnameVars.add(path.node.id.name);
+            const line = path.node.loc?.start.line ?? '?';
+            
+            if (t.isCallExpression(path.node.init) && t.isIdentifier(path.node.init.callee)) {
+              const hookName = path.node.init.callee.name;
+
+              if (hookName === "usePathname") {
+                if (t.isIdentifier(path.node.id) && path.node.id.name !== "pathname") {
+                  const oldName = path.node.id.name;
+                  path.scope.rename(oldName, "pathname");
+                  warnings.push(`[Line ${line}] Renamed variable '${oldName}' to 'pathname' to match Next.js hook conventions.`);
+                }
+                pathnameVars.add("pathname");
+              }
+
+              if (hookName === "useRouter") {
+                if (t.isIdentifier(path.node.id) && path.node.id.name !== "router") {
+                  const oldName = path.node.id.name;
+                  path.scope.rename(oldName, "router");
+                  warnings.push(`[Line ${line}] Renamed variable '${oldName}' to 'router' to prevent ReferenceError and match Next.js conventions.`);
+                }
               }
             }
           },
@@ -148,7 +161,7 @@
               if (arg && t.isUnaryExpression(arg) && arg.operator === "-" && t.isNumericLiteral(arg.argument, { value: 1 })) {
                 path.node.callee = t.memberExpression(t.identifier("router"), t.identifier("back"));
                 path.node.arguments = [];
-                warnings.push(`[Line ${line}] Fixed Back Navigation: Converted 'navigate(-1)' call to 'router.back()'.`);
+                warnings.push(`[Line ${line}] Fixed Back Navigation: Converted navigation call '-1' to 'router.back()'.`);
               } else if (arg) {
                 path.node.callee = t.memberExpression(t.identifier("router"), t.identifier("push"));
                 warnings.push(`[Line ${line}] Converted imperative navigation call to 'router.push()'.`);
